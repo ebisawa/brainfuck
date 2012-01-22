@@ -82,7 +82,7 @@ class BfVM
   end
 
   def op_jz(opr)
-    @pc = opr - 1 if @mem.get(@reg.p) == 0
+    @pc = opr - 1 if @reg.a == 0
   end
 
   def op_out(opr)
