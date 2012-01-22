@@ -49,44 +49,58 @@ class BfVM
     loop do
       code = @insts[@pc]
       return if code == nil
-      self.send("op_#{code[0]}".to_sym, code[1])
+      self.send("op_#{code[0]}".to_sym, code[1], code[2])
       @pc += 1
     end
   end
 
   private
-  def op_ld(opr)
+  def op_ld(opr1, opr2)
     @reg.a = @mem.get(@reg.p)
   end
 
-  def op_st(opr)
+  def op_st(opr1, opr2)
     @mem.set(@reg.p, @reg.a)
   end
 
-  def op_inc(opr)
-    case opr
+  def op_inc(opr1, opr3)
+    case opr1
     when :a;  @reg.a += 1
     when :p;  @reg.p += 1
     end
   end
 
-  def op_dec(opr)
-    case opr
+  def op_dec(opr1, opr2)
+    case opr1
     when :a;  @reg.a -= 1
     when :p;  @reg.p -= 1
     end
   end
 
-  def op_jmp(opr)
-    @pc = opr - 1
+  def op_add(opr1, opr2)
+    case opr1
+    when :a;  @reg.a += opr2
+    when :p;  @reg.p += opr2
+    end
   end
 
-  def op_jz(opr)
-    @pc = opr - 1 if @reg.a == 0
+  def op_sub(opr1, opr2)
+    case opr1
+    when :a;  @reg.a -= opr2
+    when :p;  @reg.p -= opr2
+    end
   end
 
-  def op_out(opr)
-    case opr
+  def op_jmp(opr1, opr2)
+    @pc = opr1 - 1
+  end
+
+  def op_jz(opr1, opr2)
+    @pc = opr1 - 1 if @reg.a == 0
+  end
+
+  def op_out(opr1, opr2)
+    case opr1
     when :a;  v = @reg.a
     when :p;  v = @reg.p
     end
@@ -141,23 +155,70 @@ class BfParser
   end
 
   def optimize(inputs)
+    do_optimize(do_optimize(inputs))
+  end
+
+  def do_optimize(inputs)
+    def optld(inputs, index)
+      inst0 = inputs[index]
+
+      if inst0[0] == :ld
+        i = 1
+        loop do
+          if (instx = inputs[index + i]) != nil
+            break if instx[0] == :ld
+            break if instx[0] == :jmp || instx[0] == :jz
+            return if instx[1] == :a
+          end
+          i += 1
+        end
+        inst0[0] = :label
+        inst0[1] = :nop
+      end
+    end
+
+    def optseq(inputs, index, op, rop)
+      inst0 = inputs[index]; opr = inst0[1]
+
+      if inst0[0] == op
+        i = 1
+        loop do
+          if (instx = inputs[index + i]) != nil
+            break if instx[0] != op || instx[1] != opr
+            instx[0] = :label
+            instx[1] = :nop
+          end
+          i += 1
+        end
+
+        if i > 1
+          inst0[0] = rop
+          inst0[2] = i
+        end
+      end
+    end
+
     inputs.each_with_index do |inst0, index|
       inst1 = inputs[index + 1]
       inst2 = inputs[index + 2]
 
       if inst1 != nil
-        if inst0[0] == :out && inst1[0] == :ld
+        if inst0[0] == :ld && inst1[0] == :st
           inst1[0] = :label; inst1[1] = :nop
         end
-      end
 
-      if inst1 != nil && inst2 != nil
-        if inst0[0] == :st && inst1[0] == :ld && inst2[0] != :out
+        if inst0[0] == :st && inst1[0] == :ld
           inst0[0] = :label; inst0[1] = :nop
           inst1[0] = :label; inst1[1] = :nop
         end
       end
+
+      optld(inputs, index)
+      optseq(inputs, index, :inc, :add)
+      optseq(inputs, index, :dec, :sub)
     end
+
+    inputs.delete_if {|x| x[1] == :nop }
     inputs
   end
 
@@ -194,19 +255,18 @@ class BfParser
   def parse_cmd(code)
     case code
     when :incp
+      @insts << [ :st,     nil ]
       @insts << [ :inc,    :p  ]
+      @insts << [ :ld,     nil ]
     when :decp
+      @insts << [ :st,     nil ]
       @insts << [ :dec,    :p  ]
+      @insts << [ :ld,     nil ]
     when :plus
-      @insts << [ :ld,     nil ]
       @insts << [ :inc,    :a  ]
-      @insts << [ :st,     nil ]
     when :minus
-      @insts << [ :ld,     nil ]
       @insts << [ :dec,    :a  ]
-      @insts << [ :st,     nil ]
     when :output
-      @insts << [ :ld,     nil ]
       @insts << [ :out,    :a  ]
 
     when :input
@@ -215,7 +275,6 @@ class BfParser
     when :loop_begin
       @loop.newloop
       @insts << [ :label,  @loop.begin_label ]
-      @insts << [ :ld,     nil ]
       @insts << [ :jz,     @loop.end_label ]
 
     when :loop_end
