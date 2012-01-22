@@ -158,8 +158,6 @@ class BfParser
 
     when :loop_end
       @insts << [ :jmp,    @loop_begin_addr ]
-
-      @loop_begin_addr = nil
       rewrite_loop_end_addr(@insts.size)
     end
   end
