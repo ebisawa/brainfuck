@@ -108,11 +108,28 @@ class BfParser
     ']' => :loop_end,
   }
 
+  class LoopManager
+    def initialize
+      @count = 0
+    end
+
+    def newloop
+      @count += 1
+    end
+
+    def begin_label
+      "loop_begin_#{@count}"
+    end
+
+    def end_label
+      "loop_end_#{@count}"
+    end
+  end
+
   def initialize(&getproc)
+    @loop = LoopManager.new
     @getproc = getproc
     @cmds = []; @insts = []
-
-    @loop_begin_addr = nil    
   end 
 
   def parse
@@ -120,7 +137,51 @@ class BfParser
       code = BFCMD[cmd]
       parse_cmd(code) if code != nil
     end
-    @insts
+    resolve_label(optimize(@insts))
+  end
+
+  def optimize(inputs)
+    inputs.each_with_index do |inst0, index|
+      inst1 = inputs[index + 1]
+      inst2 = inputs[index + 2]
+
+      if inst1 != nil
+        if inst0[0] == :out && inst1[0] == :ld
+          inst1[0] = :label; inst1[1] = :nop
+        end
+      end
+
+      if inst1 != nil && inst2 != nil
+        if inst0[0] == :st && inst1[0] == :ld && inst2[0] != :out
+          inst0[0] = :label; inst0[1] = :nop
+          inst1[0] = :label; inst1[1] = :nop
+        end
+      end
+    end
+    inputs
+  end
+
+  def resolve_label(inputs)
+    label_pos = {}
+
+    index = 0
+    while index < inputs.size
+      inst = inputs[index]
+      if inst[0] == :label
+        label_pos[inst[1]] = index
+        inputs.delete_at(index)
+      else
+        index += 1
+      end
+    end
+
+    inputs.each do |inst|
+      case inst[0]
+      when :jmp, :jz
+        pos = label_pos[inst[1]]
+        inst[1] = pos
+      end
+    end
   end
 
   private
@@ -152,25 +213,14 @@ class BfParser
       raise "input is not supported"
 
     when :loop_begin
-      @loop_begin_addr = @insts.size
+      @loop.newloop
+      @insts << [ :label,  @loop.begin_label ]
       @insts << [ :ld,     nil ]
-      @insts << [ :jz,     :pending ]
+      @insts << [ :jz,     @loop.end_label ]
 
     when :loop_end
-      @insts << [ :jmp,    @loop_begin_addr ]
-      rewrite_loop_end_addr(@insts.size)
-    end
-  end
-
-  def rewrite_loop_end_addr(end_addr)
-    index = @insts.size - 1
-    while index > 0
-      inst = @insts[index]
-      if inst[0] == :jz && inst[1] == :pending
-        inst[1] = end_addr
-        return
-      end
-      index -= 1
+      @insts << [ :jmp,    @loop.begin_label ]
+      @insts << [ :label,  @loop.end_label ]
     end
   end
 end
@@ -181,8 +231,17 @@ def getcommands
   return line.split(//)
 end
 
+def dump_insts(insts)
+  insts.each_with_index do |inst, addr|
+    printf("%4u   ", addr); p inst
+  end
+  puts ""
+end
+
 parser = BfParser.new { getcommands }
 insts = parser.parse
+
+dump_insts(insts)
 
 BfVM.new(insts).run
 puts ""
